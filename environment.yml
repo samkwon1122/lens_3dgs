@@ -1,10 +1,10 @@
-name: gaussian_splatting
+name: 3dgskhc
 channels:
   - pytorch
   - conda-forge
   - defaults
 dependencies:
-  - cudatoolkit=11.6
+  - cudatoolkit-dev=11.6
   - plyfile
   - python=3.7.13
   - pip=22.3.1
