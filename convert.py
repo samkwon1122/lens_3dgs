@@ -98,7 +98,7 @@ if(args.resize):
         
         os.makedirs(destination_dir, exist_ok=True)
         
-        for files in files:
+        for file in files:
             source_file = os.path.join(root, file)
             destination_file = os.path.join(destination_dir, file)
             shutil.copy2(source_file, destination_file)
