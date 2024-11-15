@@ -219,7 +219,8 @@ def main():
     # Load data
     images_path = os.path.join(args.input_path, "images.bin")
     points3D_path = os.path.join(args.input_path, "points3D.bin")
-    base_path = os.path.dirname(args.input_path)
+    cameras_path = os.path.join(args.input_path, "cameras.bin")
+    base_path = os.path.dirname(args.input_path.rstrip("/"))
     
     images = read_images_binary(images_path)
     points3D = read_points3D_binary(points3D_path)
@@ -253,9 +254,11 @@ def main():
         # Save filtered images and points3D in sequence folder
         seq_images_path = os.path.join(seq_folder, "images.bin")
         seq_points3D_path = os.path.join(seq_folder, "points3D.bin")
+        seq_cameras_path = os.path.join(seq_folder, "cameras.bin")
         
         write_images_binary(filtered_images, seq_images_path)
         write_points3D_binary(filtered_points3D, seq_points3D_path)
+        shutil.copy(cameras_path, seq_cameras_path)
         
         print(f"Data for {seq_prefix} saved in {seq_folder}")
 
