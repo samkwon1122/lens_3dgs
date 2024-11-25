@@ -1,4 +1,6 @@
+import struct
 import numpy as np
+from scipy.spatial import KDTree
 import argparse
 import collections
 import struct
@@ -10,7 +12,7 @@ CameraModel = collections.namedtuple(
 Camera = collections.namedtuple(
     "Camera", ["id", "model", "width", "height", "params"])
 BaseImage = collections.namedtuple(
-    "Image", ["id", "qvec", "tvec", "camera_id", "name", "xys", "point3D_ids"])
+    "Image", ["id", "qvec", "tvec", "camera_id", "name", "xys", "point3D_ids", "camera_center"])
 Point3D = collections.namedtuple(
     "Point3D", ["id", "xyz", "rgb", "error", "image_ids", "point2D_idxs"])
 CAMERA_MODELS = {
@@ -30,7 +32,6 @@ CAMERA_MODEL_IDS = dict([(camera_model.model_id, camera_model)
                          for camera_model in CAMERA_MODELS])
 CAMERA_MODEL_NAMES = dict([(camera_model.model_name, camera_model)
                            for camera_model in CAMERA_MODELS])
-
 
 def qvec2rotmat(qvec):
     return np.array([
@@ -115,10 +116,13 @@ def read_images_binary(path_to_model_file):
             xys = np.column_stack([tuple(map(float, x_y_id_s[0::3])),
                                    tuple(map(float, x_y_id_s[1::3]))])
             point3D_ids = np.array(tuple(map(int, x_y_id_s[2::3])))
+            
+            camera_center = -qvec2rotmat(qvec).T @ tvec
+            
             images[image_id] = Image(
                 id=image_id, qvec=qvec, tvec=tvec,
                 camera_id=camera_id, name=image_name,
-                xys=xys, point3D_ids=point3D_ids)
+                xys=xys, point3D_ids=point3D_ids, camera_center=camera_center)
     return images
 
 def write_images_binary(images, path_to_model_file):
@@ -196,87 +200,98 @@ def write_points3D_binary(points3D, path_to_model_file):
             for image_id, point2D_id in zip(pt.image_ids, pt.point2D_idxs):
                 write_next_bytes(fid, [image_id, point2D_id], "ii")
 
-def filter_images(images, seq_prefix):
-    return {id: img for id, img in images.items() if img.name.split('/')[0] == seq_prefix}
-
-def filter_points3D(points3D, filtered_images):
-    filtered_image_ids = set(filtered_images.keys())
-    
-    filtered_points3D = {}
-    for point_id, point in points3D.items():
-        remaining_image_ids = np.array([img_id for img_id in point.image_ids if img_id in filtered_image_ids])
-        
-        if remaining_image_ids.size > 0:
-            filtered_points3D[point_id] = point
-
-    return filtered_points3D
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_path", required=True, help="Path to the folder containing images.bin and points3D.bin")
+    parser.add_argument("--input_path", required=True)
     args = parser.parse_args()
     
-    # Load data
-    images_path = os.path.join(args.input_path, "images.bin")
-    points3D_path = os.path.join(args.input_path, "points3D.bin")
-    cameras_path = os.path.join(args.input_path, "cameras.bin")
-    base_path = os.path.dirname(args.input_path.rstrip("/"))
+    images = read_images_binary(os.path.join(args.input_path, "images.bin"))
+    points3D = read_points3D_binary(os.path.join(args.input_path, "points3D.bin"))
+
+    d_scene = -1 # Scene과의 최소 거리
+    d_view = 100   # Train 카메라와의 최대 거리
+    resolution = 0.5  # Candidate 위치 생성 간격
+    n_novel = 1000   # 생성할 novel view 수
+    theta = 15 
     
-    images = read_images_binary(images_path)
-    points3D = read_points3D_binary(points3D_path)
+    base_dir, last_dir = os.path.split(args.input_path.rstrip('/'))
+    novel_dir = os.path.join(base_dir, last_dir + "_novel")
+    os.makedirs(novel_dir, exist_ok=True)
+    output_path = os.path.join(novel_dir, "images.bin")
     
-    # Define sequences to process based on input path
-    if "GreatCourt" in args.input_path:
-        seq_list = ["seq1", "seq2", "seq3", "seq4", "seq5"]
-    elif "ShopFacade" in args.input_path:
-        seq_list = ["seq1", "seq2", "seq3"]
-    elif "KingsCollege" in args.input_path:
-        seq_list = ["seq1", "seq2", "seq3", "seq4", "seq5", "seq6", "seq7", "seq8"]
-    elif "OldHospital" in args.input_path:
-        seq_list = ["seq1", "seq2", "seq3", "seq4", "seq5", "seq6", "seq7", "seq8", "seq9"]
-    elif "StMarysChurch" in args.input_path:
-        seq_list = ["seq1", "seq2", "seq3", "seq4", "seq5", "seq6", "seq7", "seq8", "seq9", "seq10", "seq11", "seq12", "seq13", "seq14"]
-    elif "Street" in args.input_path:
-        seq_list = ["img", "img_east", "img_north", "img_south", "img_west"]
-        
-    elif "chess" in args.input_path:
-        seq_list = ["seq-01", "seq-02", "seq-04", "seq-06"]
-    elif "fire" in args.input_path:
-        seq_list = ["seq-01", "seq-02"]
-    elif "heads" in args.input_path:
-        seq_list = ["seq-02"]
-    elif "office" in args.input_path:
-        seq_list = ["seq-01", "seq-03", "seq-04", "seq-05", "seq-08", "seq-10"]
-    elif "pumpkin" in args.input_path:
-        seq_list = ["seq-02", "seq-03", "seq-06", "seq-08"]
-    elif "redkitchen" in args.input_path:
-        seq_list = ["seq-01", "seq-02", "seq-05", "seq-07", "seq-08", "seq-11", "seq-13"]
-    elif "stairs" in args.input_path:
-        seq_list = ["seq-02", "seq-03", "seq-05", "seq-06"]
+    camera_path = os.path.join(args.input_path, "cameras.bin")
+    shutil.copy(camera_path, os.path.join(novel_dir, "cameras.bin"))
     
-    else:
-        print("No matching sequences found for input path.")
-        return
+    # 1. original camera centers
+    camera_centers = []
+    for image in images.values():
+        camera_center = -qvec2rotmat(image.qvec).T @ image.tvec
+        camera_centers.append(camera_center)    
+    camera_centers = np.array(camera_centers)
     
-    # Process each sequence
-    for seq_prefix in seq_list:
-        seq_folder = os.path.join(base_path, seq_prefix)
-        os.makedirs(seq_folder, exist_ok=True)
+    # 2. bounding box
+    min_corner = np.min(camera_centers, axis=0)
+    max_corner = np.max(camera_centers, axis=0)
+    average_y = np.mean(camera_centers[:, 1])
+    
+    # 3. candidates
+    candidates = []
+    x_range = np.arange(min_corner[0], max_corner[0], resolution)
+    z_range = np.arange(min_corner[2], max_corner[2], resolution)
+
+    for x in x_range:
+        for z in z_range:
+            candidates.append([x, average_y, z])
+    candidates = np.array(candidates)
+    
+    # 4. filtering
+    scene_points = np.array([point.xyz for point in points3D.values()])
+    scene_kdtree = KDTree(scene_points)
+    train_kdtree = KDTree(camera_centers)
+    
+    dist_scene, _ = scene_kdtree.query(candidates)
+    dist_train, nearest_train_idx = train_kdtree.query(candidates)
+    valid_mask = (dist_scene > d_scene) & (dist_train < d_view)
+    
+    valid_candidates = candidates[valid_mask]
+    nearest_indices = nearest_train_idx[valid_mask]
+    
+    # 5. novel views
+    novel_views = {}
+    
+    for i, (center, train_idx) in enumerate(zip(valid_candidates, nearest_indices)):
+        train_image = list(images.values())[train_idx]
+        random_angles = np.radians(np.random.uniform(-theta / 2, theta / 2, 3))
+        random_rotation = np.array([
+            [np.cos(random_angles[2]) * np.cos(random_angles[1]), 
+             np.cos(random_angles[2]) * np.sin(random_angles[1]) * np.sin(random_angles[0]) - np.sin(random_angles[2]) * np.cos(random_angles[0]), 
+             np.cos(random_angles[2]) * np.sin(random_angles[1]) * np.cos(random_angles[0]) + np.sin(random_angles[2]) * np.sin(random_angles[0])],
+            [np.sin(random_angles[2]) * np.cos(random_angles[1]), 
+             np.sin(random_angles[2]) * np.sin(random_angles[1]) * np.sin(random_angles[0]) + np.cos(random_angles[2]) * np.cos(random_angles[0]), 
+             np.sin(random_angles[2]) * np.sin(random_angles[1]) * np.cos(random_angles[0]) - np.cos(random_angles[2]) * np.sin(random_angles[0])],
+            [-np.sin(random_angles[1]), 
+             np.cos(random_angles[1]) * np.sin(random_angles[0]), 
+             np.cos(random_angles[1]) * np.cos(random_angles[0])]
+        ])
+        new_qvec = rotmat2qvec(random_rotation @ qvec2rotmat(train_image.qvec))
         
-        # Filter images and 3D points for the current sequence
-        filtered_images = filter_images(images, seq_prefix)
-        filtered_points3D = filter_points3D(points3D, filtered_images)
-        
-        # Save filtered images and points3D in sequence folder
-        seq_images_path = os.path.join(seq_folder, "images.bin")
-        seq_points3D_path = os.path.join(seq_folder, "points3D.bin")
-        seq_cameras_path = os.path.join(seq_folder, "cameras.bin")
-        
-        write_images_binary(filtered_images, seq_images_path)
-        write_points3D_binary(filtered_points3D, seq_points3D_path)
-        shutil.copy(cameras_path, seq_cameras_path)
-        
-        print(f"Data for {seq_prefix} saved in {seq_folder}")
+        novel_views[i] = Image(
+            id=i,  # 새로운 ID
+            qvec=new_qvec,  # 새로운 회전
+            tvec=-qvec2rotmat(new_qvec) @ center,  # 새로운 위치
+            camera_id=train_image.camera_id,  # 동일 카메라 ID
+            name=f"novel_view_{i}.png",  # 새 이미지 이름
+            xys=np.empty((0, 2)),  # Empty 2D points
+            point3D_ids=np.empty(0, dtype=int),
+            camera_center=center
+        )
+        if len(novel_views) >= n_novel:
+            break
+
+    # 6. save novel views
+    write_images_binary(novel_views, output_path)
+    print(f"Novel views saved to {output_path}")
 
 if __name__ == "__main__":
     main()

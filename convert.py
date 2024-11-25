@@ -91,10 +91,10 @@ if(args.resize):
     print("Copying and resizing...")
 
     # Resize images.
-    os.makedirs(args.source_path + "/images_3", exist_ok=True)
+    os.makedirs(args.source_path + "/images_2", exist_ok=True)
     
     for root, dirs, files in os.walk(args.source_path + "/images"):
-        destination_dir = root.replace("images", "images_3")
+        destination_dir = root.replace("images", "images_2")
         
         os.makedirs(destination_dir, exist_ok=True)
         
@@ -102,7 +102,7 @@ if(args.resize):
             source_file = os.path.join(root, file)
             destination_file = os.path.join(destination_dir, file)
             shutil.copy2(source_file, destination_file)
-            exit_code = os.system(magick_command + " mogrify -resize 640x360 " + destination_file)
+            exit_code = os.system(magick_command + " mogrify -resize 320x240 " + destination_file)
             if exit_code != 0:
                 logging.error(f"33.3% resize failed with code {exit_code}. Exiting.")
                 exit(exit_code)
