@@ -7,6 +7,8 @@ import struct
 import os
 import shutil
 
+import matplotlib.pyplot as plt
+
 CameraModel = collections.namedtuple(
     "CameraModel", ["model_id", "model_name", "num_params"])
 Camera = collections.namedtuple(
@@ -87,6 +89,41 @@ def write_next_bytes(fid, data, format_char_sequence, endian_character="<"):
     else:
         bytes = struct.pack(endian_character + format_char_sequence, data)
     fid.write(bytes)
+
+
+def read_cameras_binary(path_to_model_file):
+    """
+    see: src/colmap/scene/reconstruction.cc
+        void Reconstruction::WriteCamerasBinary(const std::string& path)
+        void Reconstruction::ReadCamerasBinary(const std::string& path)
+    """
+    cameras = {}
+    with open(path_to_model_file, "rb") as fid:
+        num_cameras = read_next_bytes(fid, 8, "Q")[0]
+        for _ in range(num_cameras):
+            camera_properties = read_next_bytes(
+                fid, num_bytes=24, format_char_sequence="iiQQ"
+            )
+            camera_id = camera_properties[0]
+            model_id = camera_properties[1]
+            model_name = CAMERA_MODEL_IDS[camera_properties[1]].model_name
+            width = camera_properties[2]
+            height = camera_properties[3]
+            num_params = CAMERA_MODEL_IDS[model_id].num_params
+            params = read_next_bytes(
+                fid,
+                num_bytes=8 * num_params,
+                format_char_sequence="d" * num_params,
+            )
+            cameras[camera_id] = Camera(
+                id=camera_id,
+                model=model_name,
+                width=width,
+                height=height,
+                params=np.array(params),
+            )
+        assert len(cameras) == num_cameras
+    return cameras
 
 def read_images_binary(path_to_model_file):
     """
@@ -201,108 +238,104 @@ def write_points3D_binary(points3D, path_to_model_file):
                 write_next_bytes(fid, [image_id, point2D_id], "ii")
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input_path", required=True)
-    args = parser.parse_args()
-    
-    images = read_images_binary(os.path.join(args.input_path, "images.bin"))
-    points3D = read_points3D_binary(os.path.join(args.input_path, "points3D.bin"))
+images = read_images_binary("/data1/heungchan/CambridgeLandmarks/ShopFacade/sparse/00/images.bin")
+cameras = read_cameras_binary("/data1/heungchan/CambridgeLandmarks/ShopFacade/sparse/00/cameras.bin")
 
-    d_scene = 1 # Scene과의 최소 거리
-    d_view = 8   # Train 카메라와의 최대 거리
-    resolution = 1  # Candidate 위치 생성 간격
-    theta = 15 
-    
-    base_dir, last_dir = os.path.split(args.input_path.rstrip('/'))
-    novel_dir = os.path.join(base_dir, last_dir + "_novel")
-    os.makedirs(novel_dir, exist_ok=True)
-    output_path = os.path.join(novel_dir, "images.bin")
-    
-    camera_path = os.path.join(args.input_path, "cameras.bin")
-    shutil.copy(camera_path, os.path.join(novel_dir, "cameras.bin"))
-    
-    # 1. original camera centers
-    camera_centers = []
-    for image in images.values():
-        camera_center = -qvec2rotmat(image.qvec).T @ image.tvec
-        camera_centers.append(camera_center)    
-    camera_centers = np.array(camera_centers)
-    
-    # 2. bounding box
-    min_corner = np.min(camera_centers, axis=0)
-    max_corner = np.max(camera_centers, axis=0)
-    
-    # 3. candidates
-    candidates = []
-    x_range = np.arange(min_corner[0], max_corner[0], resolution)
-    y_range = np.arange(min_corner[1], max_corner[1], resolution)
+camera_centers = []
+scaling_factors = {}
 
-    candidates_xy = []
-    for x in x_range:
-        for y in y_range:
-            candidates_xy.append([x, y])
-    
-    train_xy_kdtree = KDTree(camera_centers[:, [0, 1]])
-    _, nearest_train_xy_idx = train_xy_kdtree.query(candidates_xy)
-    
-    for (x, y), idx in zip(candidates_xy, nearest_train_xy_idx):
-        z = camera_centers[idx, 2]
-        candidates.append([x, y, z])
-    candidates = np.array(candidates)
-    
-    # 4. filtering
-    scene_points = np.array([point.xyz for point in points3D.values()])
-    scene_kdtree = KDTree(scene_points)
-    train_kdtree = KDTree(camera_centers)
-    
-    dist_scene, _ = scene_kdtree.query(candidates)
-    dist_train, nearest_train_idx = train_kdtree.query(candidates)
-    valid_mask = (dist_scene > d_scene) & (dist_train < d_view)
+real_focal_length = 30.0  # in mm
+pixel_size = 0.0014  # in mm
 
-    # valid_mask = (dist_train < d_view)
-    # for i, candidate in enumerate(candidates):
-    #     if valid_mask[i]:
-    #         indices = scene_kdtree.query_ball_point(candidate, r=0.3)
-    #         if len(indices) > 50:
-    #             valid_mask[i] = False
+# for image_id, image in images.items():
+#     camera = cameras[image.camera_id]
+#     focal_length = camera.params[0] * pixel_size  # Convert focal length to mm
+#     scaling_factor = real_focal_length / focal_length 
+#     scaling_factors[image_id] = scaling_factor
+#     image_center = image.camera_center * scaling_factor
+#     images[image_id] = image._replace(camera_center=image_center)
     
-    valid_candidates = candidates[valid_mask]
-    nearest_indices = nearest_train_idx[valid_mask]
+for image in images.values():
+    camera_centers.append(image.camera_center)
     
-    # 5. novel views
-    novel_views = {}
-    
-    for i, (center, train_idx) in enumerate(zip(valid_candidates, nearest_indices)):
-        train_image = list(images.values())[train_idx]
-        random_angles = np.radians(np.random.uniform(-theta / 2, theta / 2, 3))
-        random_rotation = np.array([
-            [np.cos(random_angles[2]) * np.cos(random_angles[1]), 
-             np.cos(random_angles[2]) * np.sin(random_angles[1]) * np.sin(random_angles[0]) - np.sin(random_angles[2]) * np.cos(random_angles[0]), 
-             np.cos(random_angles[2]) * np.sin(random_angles[1]) * np.cos(random_angles[0]) + np.sin(random_angles[2]) * np.sin(random_angles[0])],
-            [np.sin(random_angles[2]) * np.cos(random_angles[1]), 
-             np.sin(random_angles[2]) * np.sin(random_angles[1]) * np.sin(random_angles[0]) + np.cos(random_angles[2]) * np.cos(random_angles[0]), 
-             np.sin(random_angles[2]) * np.sin(random_angles[1]) * np.cos(random_angles[0]) - np.cos(random_angles[2]) * np.sin(random_angles[0])],
-            [-np.sin(random_angles[1]), 
-             np.cos(random_angles[1]) * np.sin(random_angles[0]), 
-             np.cos(random_angles[1]) * np.cos(random_angles[0])]
-        ])
-        new_qvec = rotmat2qvec(random_rotation @ qvec2rotmat(train_image.qvec))
-        
-        novel_views[i] = Image(
-            id=i,  # 새로운 ID
-            qvec=new_qvec,  # 새로운 회전
-            tvec=-qvec2rotmat(new_qvec) @ center,  # 새로운 위치
-            camera_id=train_image.camera_id,  # 동일 카메라 ID
-            name=f"novel_view_{i}.png",  # 새 이미지 이름
-            xys=np.empty((0, 2)),  # Empty 2D points
-            point3D_ids=np.empty(0, dtype=int),
-            camera_center=center
-        )
+camera_centers = np.array(camera_centers)
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(camera_centers[:, 0], camera_centers[:, 1], camera_centers[:, 2])
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
+ax.set_zlabel('Z')
 
-    # 6. save novel views
-    write_images_binary(novel_views, output_path)
-    print(f"Novel views saved to {output_path}")
+ax.view_init(elev=90, azim=0)  # Set the elevation and azimuth to get the z-axis view
 
-if __name__ == "__main__":
-    main()
+plt.savefig("camera_centers_scale.png")
+
+'''
+novels = read_images_binary("/data1/heungchan/CambridgeLandmarks/ShopFacade/sparse/seq2_novel/images.bin")
+camera_centers = []
+
+for image in images.values():
+    camera_center = -qvec2rotmat(image.qvec).T @ image.tvec
+    camera_centers.append(camera_center)
+
+camera_centers = np.array(camera_centers)
+min_corner = np.min(camera_centers, axis=0)
+max_corner = np.max(camera_centers, axis=0)
+bounding_box = np.array([min_corner, max_corner])
+
+
+novel_centers = []
+for novel in novels.values():
+    novel_center = -qvec2rotmat(novel.qvec).T @ novel.tvec
+    novel_centers.append(novel_center)
+novel_centers = np.array(novel_centers)
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(camera_centers[:, 0], camera_centers[:, 1], camera_centers[:, 2])
+ax.scatter(novel_centers[:, 0], novel_centers[:, 1], novel_centers[:, 2], c='r')
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
+ax.set_zlabel('Z')
+
+# Set the same range for all axes
+max_range = np.array([camera_centers[:, 0].max() - camera_centers[:, 0].min(), 
+                      camera_centers[:, 1].max() - camera_centers[:, 1].min(), 
+                      camera_centers[:, 2].max() - camera_centers[:, 2].min()]).max() / 2.0
+
+mid_x = (camera_centers[:, 0].max() + camera_centers[:, 0].min()) * 0.5
+mid_y = (camera_centers[:, 1].max() + camera_centers[:, 1].min()) * 0.5
+mid_z = (camera_centers[:, 2].max() + camera_centers[:, 2].min()) * 0.5
+
+ax.set_xlim(mid_x - max_range, mid_x + max_range)
+ax.set_ylim(mid_y - max_range, mid_y + max_range)
+ax.set_zlim(mid_z - max_range, mid_z + max_range)
+
+ax.view_init(elev=0, azim=-90)  # Set the elevation and azimuth to get the x-axis view
+
+# Plot the bounding box in red
+for i in range(2):
+    for j in range(2):
+        for k in range(2):
+            ax.plot([bounding_box[i, 0], bounding_box[i, 0]], 
+                    [bounding_box[j, 1], bounding_box[j, 1]], 
+                    [bounding_box[0, 2], bounding_box[1, 2]], 'r-')
+            ax.plot([bounding_box[i, 0], bounding_box[i, 0]], 
+                    [bounding_box[0, 1], bounding_box[1, 1]], 
+                    [bounding_box[k, 2], bounding_box[k, 2]], 'r-')
+            ax.plot([bounding_box[0, 0], bounding_box[1, 0]], 
+                    [bounding_box[j, 1], bounding_box[j, 1]], 
+                    [bounding_box[k, 2], bounding_box[k, 2]], 'r-')
+
+plt.savefig("camera_centers_top_view.png")
+
+ax.view_init(elev=90, azim=0)  # Set the elevation and azimuth to get the z-axis view
+
+plt.savefig("camera_centers_z.png")
+
+ax.view_init(elev=0, azim=0)  # Set the elevation and azimuth to get the y-axis view
+
+plt.savefig("camera_centers_y.png")
+
+print(len(novel_centers))
+'''

@@ -211,47 +211,43 @@ def filter_points3D(points3D, filtered_images):
 
     return filtered_points3D
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input_path", required=True, help="Path to the folder containing images.bin and points3D.bin")
-    args = parser.parse_args()
-    
+def filter(input_path):
     # Load data
-    images_path = os.path.join(args.input_path, "images.bin")
-    points3D_path = os.path.join(args.input_path, "points3D.bin")
-    cameras_path = os.path.join(args.input_path, "cameras.bin")
-    base_path = os.path.dirname(args.input_path.rstrip("/"))
+    images_path = os.path.join(input_path, "images.bin")
+    points3D_path = os.path.join(input_path, "points3D.bin")
+    cameras_path = os.path.join(input_path, "cameras.bin")
+    base_path = os.path.dirname(input_path)
     
     images = read_images_binary(images_path)
     points3D = read_points3D_binary(points3D_path)
     
     # Define sequences to process based on input path
-    if "GreatCourt" in args.input_path:
-        seq_list = ["seq1", "seq2", "seq3", "seq4", "seq5"]
-    elif "ShopFacade" in args.input_path:
-        seq_list = ["seq1", "seq2", "seq3"]
-    elif "KingsCollege" in args.input_path:
-        seq_list = ["seq1", "seq2", "seq3", "seq4", "seq5", "seq6", "seq7", "seq8"]
-    elif "OldHospital" in args.input_path:
-        seq_list = ["seq1", "seq2", "seq3", "seq4", "seq5", "seq6", "seq7", "seq8", "seq9"]
-    elif "StMarysChurch" in args.input_path:
-        seq_list = ["seq1", "seq2", "seq3", "seq4", "seq5", "seq6", "seq7", "seq8", "seq9", "seq10", "seq11", "seq12", "seq13", "seq14"]
-    elif "Street" in args.input_path:
-        seq_list = ["img", "img_east", "img_north", "img_south", "img_west"]
+    if "GreatCourt" in input_path:
+        seq_list = ["seq2", "seq3", "seq5"]
+    elif "ShopFacade" in input_path:
+        seq_list = ["seq2"]
+    elif "KingsCollege" in input_path:
+        seq_list = ["seq1", "seq4", "seq5", "seq6", "seq8"]
+    elif "OldHospital" in input_path:
+        seq_list = ["seq1", "seq2", "seq3", "seq5", "seq6", "seq7", "seq9"]
+    elif "StMarysChurch" in input_path:
+        seq_list = ["seq1", "seq2", "seq4", "seq6", "seq7", "seq8", "seq9", "seq10", "seq11", "seq12", "seq14"]
+    elif "Street" in input_path:
+        seq_list = ["img_east", "img_north", "img_south", "img_west"]
         
-    elif "chess" in args.input_path:
+    elif "chess" in input_path:
         seq_list = ["seq-01", "seq-02", "seq-04", "seq-06"]
-    elif "fire" in args.input_path:
+    elif "fire" in input_path:
         seq_list = ["seq-01", "seq-02"]
-    elif "heads" in args.input_path:
+    elif "heads" in input_path:
         seq_list = ["seq-02"]
-    elif "office" in args.input_path:
+    elif "office" in input_path:
         seq_list = ["seq-01", "seq-03", "seq-04", "seq-05", "seq-08", "seq-10"]
-    elif "pumpkin" in args.input_path:
+    elif "pumpkin" in input_path:
         seq_list = ["seq-02", "seq-03", "seq-06", "seq-08"]
-    elif "redkitchen" in args.input_path:
+    elif "redkitchen" in input_path:
         seq_list = ["seq-01", "seq-02", "seq-05", "seq-07", "seq-08", "seq-11", "seq-13"]
-    elif "stairs" in args.input_path:
+    elif "stairs" in input_path:
         seq_list = ["seq-02", "seq-03", "seq-05", "seq-06"]
     
     else:
@@ -276,7 +272,22 @@ def main():
         write_points3D_binary(filtered_points3D, seq_points3D_path)
         shutil.copy(cameras_path, seq_cameras_path)
         
-        print(f"Data for {seq_prefix} saved in {seq_folder}")
+        print(f"Data for {seq_prefix} saved in {seq_folder}")    
+
+def main():
+    data_path = "/data1/heungchan/CambridgeLandmarks/"
+    scenes = ["ShopFacade", "StMarysChurch", "GreatCourt", "KingsCollege", "OldHospital", "Street"]
+    
+    for scene in scenes:
+        input_path = data_path + scene + "/sparse/00"
+        filter(input_path)
+        
+    data_path = "/data1/heungchan/7Scenes/"
+    scenes = ["chess", "fire", "heads", "office", "pumpkin", "redkitchen", "stairs"]
+    
+    for scene in scenes:
+        input_path = data_path + scene + "/sparse/00"
+        filter(input_path)
 
 if __name__ == "__main__":
     main()
