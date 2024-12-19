@@ -209,10 +209,10 @@ def main():
     images = read_images_binary(os.path.join(args.input_path, "images.bin"))
     points3D = read_points3D_binary(os.path.join(args.input_path, "points3D.bin"))
 
-    d_scene = 1 # Scene과의 최소 거리
-    d_view = 8   # Train 카메라와의 최대 거리
-    resolution = 1  # Candidate 위치 생성 간격
-    theta = 15 
+    d_scene = 0.05 # Scene과의 최소 거리
+    d_view = 0.1   # Train 카메라와의 최대 거리
+    resolution = 0.05  # Candidate 위치 생성 간격
+    theta = 15
     
     base_dir, last_dir = os.path.split(args.input_path.rstrip('/'))
     novel_dir = os.path.join(base_dir, last_dir + "_novel")
@@ -235,61 +235,22 @@ def main():
     # 2. bounding box
     min_corner = np.min(camera_centers, axis=0)
     max_corner = np.max(camera_centers, axis=0)
+    lengths = max_corner - min_corner
+    
+    d_view = min(lengths) / 2
 
-    axis_ranges = max_corner - min_corner
-    smallest_range_axis = np.argmin(axis_ranges)
+    num_cubes = 1000
+    cube_volume = np.prod(lengths) / num_cubes
+    cube_side_length = cube_volume ** (1/3)
     
     # 3. candidates    
     candidates = []
     
-    if smallest_range_axis == 0:
-        y_range = np.arange(min_corner[1], max_corner[1], resolution)
-        z_range = np.arange(min_corner[2], max_corner[2], resolution)
-        
-        candidates_yz = []
-        for y in y_range:
-            for z in z_range:
-                candidates_yz.append([y, z])
-                
-        train_yz_kdtree = KDTree(camera_centers[:, [1, 2]])
-        _, nearest_train_yz_idx = train_yz_kdtree.query(candidates_yz)
-        
-        for (y, z), idx in zip(candidates_yz, nearest_train_yz_idx):
-            x = camera_centers[idx, 0]
-            candidates.append([x, y, z])
-        
-    if smallest_range_axis == 1:
-        x_range = np.arange(min_corner[0], max_corner[0], resolution)
-        z_range = np.arange(min_corner[2], max_corner[2], resolution)
-        
-        candidates_xz = []
-        for x in x_range:
-            for z in z_range:
-                candidates_xz.append([x, z])
-                
-        train_xz_kdtree = KDTree(camera_centers[:, [0, 2]])
-        _, nearest_train_xz_idx = train_xz_kdtree.query(candidates_xz)
-        
-        for (x, z), idx in zip(candidates_xz, nearest_train_xz_idx):
-            y = camera_centers[idx, 1]
-            candidates.append([x, y, z])    
-            
-    if smallest_range_axis == 2:
-        x_range = np.arange(min_corner[0], max_corner[0], resolution)
-        y_range = np.arange(min_corner[1], max_corner[1], resolution)
-
-        candidates_xy = []
-        for x in x_range:
-            for y in y_range:
-                candidates_xy.append([x, y])
-        
-        train_xy_kdtree = KDTree(camera_centers[:, [0, 1]])
-        _, nearest_train_xy_idx = train_xy_kdtree.query(candidates_xy)
-        
-        for (x, y), idx in zip(candidates_xy, nearest_train_xy_idx):
-            z = camera_centers[idx, 2]
-            candidates.append([x, y, z])
-    candidates = np.array(candidates)
+    x_range = np.arange(min_corner[0], max_corner[0], cube_side_length)
+    y_range = np.arange(min_corner[1], max_corner[1], cube_side_length)
+    z_range = np.arange(min_corner[2], max_corner[2], cube_side_length)
+    
+    candidates = np.array(np.meshgrid(x_range, y_range, z_range)).T.reshape(-1, 3)
     
     # 4. filtering
     scene_points = np.array([point.xyz for point in points3D.values()])
@@ -299,13 +260,6 @@ def main():
     dist_scene, _ = scene_kdtree.query(candidates)
     dist_train, nearest_train_idx = train_kdtree.query(candidates)
     valid_mask = (dist_scene > d_scene) & (dist_train < d_view)
-
-    # valid_mask = (dist_train < d_view)
-    # for i, candidate in enumerate(candidates):
-    #     if valid_mask[i]:
-    #         indices = scene_kdtree.query_ball_point(candidate, r=0.3)
-    #         if len(indices) > 50:
-    #             valid_mask[i] = False
     
     valid_candidates = candidates[valid_mask]
     nearest_indices = nearest_train_idx[valid_mask]
