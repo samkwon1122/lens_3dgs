@@ -97,7 +97,10 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, seq):
         image_path = os.path.join(images_folder, extr.name)
         image_name = extr.name
         if "novel" in seq:
-            image = Image.new('RGB', (640, 360), (255, 255, 255))
+            if "Cambridge" in image_path:
+                image = Image.new('RGB', (640, 360), (255, 255, 255))
+            else:
+                image = Image.new('RGB', (320, 240), (255, 255, 255))
         else:
             image = Image.open(image_path)
 
