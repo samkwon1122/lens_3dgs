@@ -238,37 +238,40 @@ def write_points3D_binary(points3D, path_to_model_file):
                 write_next_bytes(fid, [image_id, point2D_id], "ii")
 
 
-images = read_images_binary("/data1/heungchan/CambridgeLandmarks/ShopFacade/sparse/00/images.bin")
-cameras = read_cameras_binary("/data1/heungchan/CambridgeLandmarks/ShopFacade/sparse/00/cameras.bin")
+images = read_images_binary("/data1/heungchan/7Scenes/chess/sparse/seq-01/images.bin")
+novels = read_images_binary("/data1/heungchan/7Scenes/chess/sparse/seq-01_novel/images.bin")
 
 camera_centers = []
-scaling_factors = {}
-
-real_focal_length = 30.0  # in mm
-pixel_size = 0.0014  # in mm
-
-# for image_id, image in images.items():
-#     camera = cameras[image.camera_id]
-#     focal_length = camera.params[0] * pixel_size  # Convert focal length to mm
-#     scaling_factor = real_focal_length / focal_length 
-#     scaling_factors[image_id] = scaling_factor
-#     image_center = image.camera_center * scaling_factor
-#     images[image_id] = image._replace(camera_center=image_center)
+novel_centers = []
     
 for image in images.values():
     camera_centers.append(image.camera_center)
     
+for novel in novels.values():
+    novel_centers.append(novel.camera_center)
+    
 camera_centers = np.array(camera_centers)
+novel_centers = np.array(novel_centers)
+
+min_corner = np.min(camera_centers, axis=0)
+max_corner = np.max(camera_centers, axis=0)
+
 fig = plt.figure()
 ax = fig.add_subplot(111, projection='3d')
 ax.scatter(camera_centers[:, 0], camera_centers[:, 1], camera_centers[:, 2])
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-ax.set_zlabel('Z')
+ax.scatter(novel_centers[:, 0], novel_centers[:, 1], novel_centers[:, 2], c='r', s=10)
+
+ax.set_box_aspect([max_corner[0]-min_corner[0], max_corner[1]-min_corner[1], max_corner[2]-min_corner[2]])
+plt.savefig("camera_centers.png",dpi=300, bbox_inches='tight')
 
 ax.view_init(elev=90, azim=0)  # Set the elevation and azimuth to get the z-axis view
+plt.savefig("camera_centers_z.png",dpi=300, bbox_inches='tight')
+ax.view_init(elev=0, azim=0)  # Set the elevation and azimuth to get the y-axis view
+plt.savefig("camera_centers_y.png",dpi=300, bbox_inches='tight')
+ax.view_init(elev=0, azim=-90)  # Set the elevation and azimuth to get the x-axis view
+plt.savefig("camera_centers_x.png",dpi=300, bbox_inches='tight')
 
-plt.savefig("camera_centers_scale.png")
+print(len(novel_centers))
 
 '''
 novels = read_images_binary("/data1/heungchan/CambridgeLandmarks/ShopFacade/sparse/seq2_novel/images.bin")
