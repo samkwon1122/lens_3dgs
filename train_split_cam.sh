@@ -1,4 +1,5 @@
 #!/bin/bash
+# Can't train Street since it does not start with seq
 
 data=/data1/heungchan/CambridgeLandmarks
 
